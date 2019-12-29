@@ -1,15 +1,35 @@
 <?php
 
 	class parse_desperado{
-		var $_place_link = 'http://томск.десперадо.рф/category/photo/';
+		var $_place_link = 'http://xn--j1adfnc.xn--80ahbca0ddjg.xn--p1ai/category/photo/';
+		var $_regexp = [
+			'place' => '#<div class="td-block-span6">(.*?)</div> <!-- ./td-block-span6 -->#is',
+			'album' => '#<div class="wppa-tn-img-container" style="(.*?)</div>#is',
+
+			'album_url' => '<div class="td-module-thumb"><a href="(.*?)" rel="bookmark" title="',
+			'album_name' => '" rel="bookmark" title="(.*?)"><img width="324" height="160" class="entry-thumb"',
+			'album_preview' => '324w, (.*?) 533w',
+			'album_date' => '" >(.*?)</time></span>',
+
+			'foto_full' => '<a href="(.*?)" target="_self"',
+			'foto_small' => 'src="(.*?)"  alt="',
+		];
 		var $_place = '';
+		var $_place_content_code = '';
 		var $_curl_res = '';
 		var $_album = [];
+		var $_album_content_code = '';
 		var $_foto = [];
 
 		public function __construct($place){
 			$this->set('_place', $place);
 			$this->set_place_link();
+		}
+
+		private function pre($res){
+			echo '<textarea style="width:100%; min-height:750px;">';
+			print_r($res);
+			echo '</textarea>';
 		}
 
 		private function set($name, $value){
@@ -20,6 +40,14 @@
 			$this->set('_place_link', $this->_place_link.$this->_place.'/');
 		}
 
+		public function clean_uri($url){
+			return str_replace(['http://xn--j1adfnc.xn--80ahbca0ddjg.xn--p1ai/','https://xn--j1adfnc.xn--80ahbca0ddjg.xn--p1ai/', 'http://томск.десперадо.рф/', 'httpы://томск.десперадо.рф/'], '', $url);
+		}
+
+		public function protocol($str, $protocol = 'https:', $work = 1){
+			return ($work ? str_replace(['http:', 'https:'], $protocol, $str) : $str);
+		}
+		
 		public function set_page($page){
 			// В принципе нужна только для парсинга большого кол-ва альбомов..
 			$this->set('_place_link', $this->_place_link.'/page/'.$page.'/');
@@ -38,43 +66,55 @@
 			$this->set('_curl_res', $res);
 		}
 
+		private function preg($preg, $code){
+			preg_match_all('#'.$preg.'#is', $code, $res, PREG_PATTERN_ORDER);
+			return $res[1][0];
+		}
+
+		private function get_place_content_code(){
+			preg_match_all($this->_regexp['place'], $this->_curl_res, $code, PREG_PATTERN_ORDER);
+			$this->_place_content_code = $code[1];
+		}
+
+		private function get_album_content_code(){
+			preg_match_all($this->_regexp['album'], $this->_curl_res, $code, PREG_PATTERN_ORDER);
+			$this->_album_content_code = $code[0];
+		}
+
+		private function get_albums_data($code){
+			return [
+				'name' => $this->preg($this->_regexp['album_name'], $code),
+				'url' => $this->preg($this->_regexp['album_url'], $code),
+				'preview' => $this->preg($this->_regexp['album_preview'], $code),
+				'date' => str_replace('/', '-', $this->preg($this->_regexp['album_date'], $code)),
+			];
+		}
+
+		private function get_foto_data($code){
+			return [
+				'full' => $this->https($this->preg($this->_regexp['foto_full'], $code)),
+				'small' => $this->https($this->preg($this->_regexp['foto_small'], $code)),
+			];
+		}
+
 		private function parse_place(){
 			$this->curl();
-			$code = explode("<div class=td-module-thumb>", explode('<div class="page-nav td-pb-padding-side">', explode("<div class=td-ss-main-content>", $this->_curl_res)[1])[0]);
-			unset($code[0]);
+			$this->get_place_content_code();
 
 			$albums = [];
-			foreach($code as $key => $part){
-				$code[$key] = explode("</div> <a ", $part)[0];
-				$name = explode('title="', explode('"><img', $code[$key])[0])[1];
-				$url = str_replace('https://xn--j1adfnc.xn--80ahbca0ddjg.xn--p1ai/', '', explode('<a href="', explode('" rel=bookmark', $code[$key])[0])[1]);
-				$date = explode("/", str_replace('http://xn--j1adfnc.xn--80ahbca0ddjg.xn--p1ai/', '', $url));
-				$date = $date[0].'-'.$date[1].'-'.$date[2];
-				$preview = str_replace('https://xn--j1adfnc.xn--80ahbca0ddjg.xn--p1ai/', '', explode("324w, ", explode(' 533w"', $code[$key])[0])[1]);
-				$albums[] = [
-					'name' => $name,
-					'url' => $url,
-					'preview' => $preview,
-					'date' => $date,
-				];
-			}
+			foreach($this->_place_content_code as $key => $part)
+				$albums[] = $this->get_albums_data($part);
 
 			$this->set('_album', $albums);
 		}
 
 		private function parse_album($url = false){
 			$this->curl($url);
-			$code = explode('<div class=wppa-tn-img-container', explode('<div class=wppa-clear style="clear:both;">', explode('<div id=wppa-thumb-area-1 ', $this->_curl_res)[1])[0]);
+			$this->get_album_content_code();
+
 			$foto = [];
-			foreach($code as $key => $part){
-				$full = explode('<a href="', explode('" target=_self', $part)[0])[1];
-				$small = explode('src="', explode('" alt', explode('<img ', $part)[1])[0])[1];
-				$foto[] = [
-					'full' => $full,
-					'small' => $small
-				];
-			}
-			unset($foto[0]);
+			foreach($this->_album_content_code as $key => $part)
+				$foto[] = $this->get_foto_data($part);
 
 			$this->set('_foto', $foto);
 		}
@@ -93,6 +133,10 @@
 			}
 
 			return ($res ? json_encode($res) : $res);
+		}
+
+		public function https($str){
+			return str_replace('http://', 'https://', $str);
 		}
 	}
 
